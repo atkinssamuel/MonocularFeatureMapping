@@ -2,7 +2,7 @@ import os
 import glob
 
 import numpy as np
-import cv2
+import cv2 
 import scipy.io as sio
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -33,7 +33,24 @@ class FeatureProcessor:
 
     def get_features(self, id):
         """ Get the keypoints and the descriptors for features for the image with index id."""
-        raise NotImplementedError('Implement get_features!')
+        #fill in with harris
+        
+        img = self.get_image(id)
+        #img = np.float32(img)
+        #dst = cv2.cornerHarris(img,2,3,0.04)
+        #img[dst>0.01*dst.max()]=[0,0,255]
+
+        #fill in with orb
+        orb = cv2.ORB_create()
+        # find the keypoints with ORB
+        kp = orb.detect(img,None)
+        #print(kp[0].pt)
+        # compute the descriptors with ORB
+        kp, des = orb.compute(img, kp)
+        #img2 = cv2.drawKeypoints(img, kp, None, color=(0,255,0), flags=0)
+        #plt.imshow(img2), plt.show()
+
+        return kp, des
 
     def append_matches(self, matches, new_kp):
         """ Take the current matches and the current keypoints
@@ -44,6 +61,8 @@ class FeatureProcessor:
         """ Get all of the locations of features matches for each image to the features found in the
         first image. Output should be a numpy array of shape (num_images, num_features_first_image, 2), where
         the actual data is the locations of each feature in each image."""
+        kp, des = self.get_features(0)
+        
         raise NotImplementedError('Implement get_matches!')
 
 
