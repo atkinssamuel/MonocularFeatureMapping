@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 from matplotlib import pyplot as plt
 
-img1 = cv2.imread('l3_mapping_data/camera_image_1.jpeg',0)          # queryImage
+img1 = cv2.imread('l3_mapping_data/camera_image_66.jpeg',0)          # queryImage
 img2 = cv2.imread('l3_mapping_data/camera_image_0.jpeg',0) # trainImage
 
 # Initiate SIFT detector
@@ -18,15 +18,20 @@ bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 # Match descriptors.
 matches = bf.match(des1,des2)
 
+feat = np.array((50,300))
+
 # Sort them in the order of their distance.
 matches = sorted(matches, key = lambda x:x.distance)
+print(len(matches))
 
+feat[0] = matches
 # Draw first 10 matches.
 #img3 = cv2.drawMatches(img1,kp1,img2,kp2,matches[:10], flags=2)
 img3 = cv2.drawMatches(img1,kp1,img2,kp2,matches[:50], None, flags=2)
 
+print(feat[0][120])
 plt.imshow(img3),plt.show()
-cv2.imwrite('features_1.png',img3)
+#cv2.imwrite('features_1.png',img3)
 
 # orb = cv.ORB_create()
 # # find the keypoints with ORB

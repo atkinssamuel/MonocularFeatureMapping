@@ -61,9 +61,35 @@ class FeatureProcessor:
         """ Get all of the locations of features matches for each image to the features found in the
         first image. Output should be a numpy array of shape (num_images, num_features_first_image, 2), where
         the actual data is the locations of each feature in each image."""
-        kp, des = self.get_features(0)
-        
-        raise NotImplementedError('Implement get_matches!')
+        self.feature_match_locs = -1*np.ones((self.num_images, self.n_features, 2))
+
+        kp_0, des_0 = self.get_features(0)  #detect features on first image
+
+        self.features['kp'] = kp_0
+        self.features['des'] = des_0
+
+        for f_num, kp in enumerate(kp_0):
+            self.features['kp_np'].append(kp.pt)
+            self.feature_match_locs[0, f_num, 0] = kp.pt[0]
+            self.feature_match_locs[0, f_num, 1] = kp.pt[1]
+            
+        for img in range(0, self.num_images-1):
+            print(img)
+            kp, des = self.get_features(img)
+            matches = self.bf.match(des,des_0)
+
+            matches = sorted(matches, key = lambda x:x.distance)
+
+            for match in matches: #not sure if there's a better way to filter this
+                train_f_num = match.trainIdx
+                query_f_num = match.queryIdx
+                #print(train_f_num, query_f_num)
+                self.feature_match_locs[img, train_f_num, 0] = kp[query_f_num].pt[0]
+                self.feature_match_locs[img, train_f_num, 1] = kp[query_f_num].pt[1]    
+            
+
+
+        return self.feature_match_locs
 
 
 def triangulate(feature_data, tf, inv_K):
@@ -86,7 +112,7 @@ def main():
     data_folder = os.path.join(os.getcwd(),'l3_mapping_data/')
     f_processor = FeatureProcessor(data_folder)
     feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
-
+    print(feature_locations.shape)
     # feature rejection
     raise NotImplementedError('(Optionally) implement feature rejection! (though we strongly recommend it)')
     good_feature_locations = None  # delete this!
