@@ -79,16 +79,16 @@ class FeatureProcessor:
             matches = self.bf.match(des,des_0)
 
             matches = sorted(matches, key = lambda x:x.distance)
+            avg = sum(point.distance for point in matches)/len(matches)
 
             for match in matches: #not sure if there's a better way to filter this
-                train_f_num = match.trainIdx
-                query_f_num = match.queryIdx
-                #print(train_f_num, query_f_num)
-                self.feature_match_locs[img, train_f_num, 0] = kp[query_f_num].pt[0]
-                self.feature_match_locs[img, train_f_num, 1] = kp[query_f_num].pt[1]    
+                if match.distance < 0.75*avg:
+                    train_f_num = match.trainIdx
+                    query_f_num = match.queryIdx
+                    #print(train_f_num, query_f_num)
+                    self.feature_match_locs[img, train_f_num, 0] = kp[query_f_num].pt[0]
+                    self.feature_match_locs[img, train_f_num, 1] = kp[query_f_num].pt[1]    
             
-
-
         return self.feature_match_locs
 
 
