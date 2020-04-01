@@ -1,3 +1,6 @@
+# ROB521 Lab 3
+# Mackenzie Clark, Najah Hassan, Samuel Atkins
+
 import os
 import glob
 
@@ -6,7 +9,8 @@ import cv2
 import scipy.io as sio
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-
+import numpy.linalg as la
+from sympy import Plane, Point3D
 
 class FeatureProcessor:
     def __init__(self, data_folder, n_features=500, median_filt_multiplier=1.0):
@@ -26,44 +30,39 @@ class FeatureProcessor:
         return
 
     def get_image(self, id):
-        #Load image and convert to grayscale
-        img = cv2.imread(os.path.join(self.data_folder,'camera_image_{}.jpeg'.format(id)))
-        gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+        # Load image and convert to grayscale
+        # print(os.path.join(self.data_folder, 'camera_image_{}.jpeg'.format(id)))
+        img = cv2.imread(os.path.join(self.data_folder, 'camera_image_{}.jpeg'.format(id)))
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         return gray
 
     def get_features(self, id):
         """ Get the keypoints and the descriptors for features for the image with index id."""
-        #fill in with harris
-        
+        # harris corner detector
         img = self.get_image(id)
-        #img = np.float32(img)
-        #dst = cv2.cornerHarris(img,2,3,0.04)
-        #img[dst>0.01*dst.max()]=[0,0,255]
+        # img = np.float32(img)
+        # dst = cv2.cornerHarris(img,2,3,0.04)
+        # img[dst>0.01*dst.max()]=[0,0,255]
 
-        #fill in with orb
+        # ORB feature detector
         orb = cv2.ORB_create()
         # find the keypoints with ORB
-        kp = orb.detect(img,None)
-        #print(kp[0].pt)
+        kp = orb.detect(img, None)
+        # print(kp[0].pt)
         # compute the descriptors with ORB
         kp, des = orb.compute(img, kp)
-        #img2 = cv2.drawKeypoints(img, kp, None, color=(0,255,0), flags=0)
-        #plt.imshow(img2), plt.show()
+        # img2 = cv2.drawKeypoints(img, kp, None, color=(0,255,0), flags=0)
+        # plt.imshow(img2), plt.show()
 
         return kp, des
-
-    def append_matches(self, matches, new_kp):
-        """ Take the current matches and the current keypoints
-        and append them to the list of consistent match locations. """
-        raise NotImplementedError('Implement append_matches!')
 
     def get_matches(self):
         """ Get all of the locations of features matches for each image to the features found in the
         first image. Output should be a numpy array of shape (num_images, num_features_first_image, 2), where
         the actual data is the locations of each feature in each image."""
-        self.feature_match_locs = -1*np.ones((self.num_images, self.n_features, 2))
+        self.feature_match_locs = -1 * np.ones((self.num_images, self.n_features, 2))
 
-        kp_0, des_0 = self.get_features(0)  #detect features on first image
+        kp_0, des_0 = self.get_features(0)  # detect features on first image
 
         self.features['kp'] = kp_0
         self.features['des'] = des_0
@@ -72,34 +71,134 @@ class FeatureProcessor:
             self.features['kp_np'].append(kp.pt)
             self.feature_match_locs[0, f_num, 0] = kp.pt[0]
             self.feature_match_locs[0, f_num, 1] = kp.pt[1]
-            
-        for img in range(0, self.num_images-1):
-            print(img)
-            kp, des = self.get_features(img)
-            matches = self.bf.match(des,des_0)
 
-            matches = sorted(matches, key = lambda x:x.distance)
+        # print(self.num_images-1)
+        for img in range(1, self.num_images):
+            # print(img)
+            kp, des = self.get_features(img)
+            matches = self.bf.match(des, des_0)
+
+            matches = sorted(matches, key=lambda x: x.distance)
             avg = sum(point.distance for point in matches)/len(matches)
 
-            for match in matches: #not sure if there's a better way to filter this
+            # lowes ratio test to get the good matches
+            for match in matches:  # not sure if there's a better way to filter this
                 if match.distance < 0.75*avg:
                     train_f_num = match.trainIdx
                     query_f_num = match.queryIdx
-                    #print(train_f_num, query_f_num)
+                    # print(train_f_num, query_f_num)
                     self.feature_match_locs[img, train_f_num, 0] = kp[query_f_num].pt[0]
                     self.feature_match_locs[img, train_f_num, 1] = kp[query_f_num].pt[1]    
-            
+
+        # includes the first frame feature locations
         return self.feature_match_locs
 
+    def ransac(self, triangulated_points):
+        """ Feature rejection function
+        :param triangulated_points: np array, (num_features, 3) all triangulated points
+        :return good_points: (N, 3) where N is the total number of inliers
+        """
+        # we only expect to have the 5-10% outliers, so we'll set the minimum inliers
+        # to be 92% of the total number of features.
+        num_features = triangulated_points.shape[0]
+        
+        # tunable parameters
+        mininliers = .92 * num_features
+        alpha = 0.005
+
+        maxinliers = 0
+        sympy_points = np.ndarray((num_features, 3))
+        for j in range(num_features):
+            sympy_points[j] = Point3D(triangulated_points[j, 0], triangulated_points[j, 1], triangulated_points[j, 2])
+
+        # make an array of possible indices that we will randomly draw from
+        for i in range(1000):
+            # select 3 random points from triangulated points to compute a plane
+            rand_pts = np.random.choice(triangulated_points.shape[0], 3)
+            normal, d = self.compute_plane(triangulated_points[rand_pts, :])
+
+            # make the points into a plane object
+            point = triangulated_points[rand_pts[0], :]
+            print('first point on plane: ' + str(point))
+            print('normal: ' + str(normal))
+            plane = Plane(Point3D(point[0], point[1], point[2]), normal_vector=normal)
+
+            # compute the reprojection error for all the points
+            reproj = np.ndarray((num_features, 1))
+            for j in range(num_features):
+                reproj[i] = plane.distance(Point3D(sympy_points[i, 0], sympy_points[i, 1], sympy_points[i, 2]))
+            print(reproj)
+            inliers = reproj[reproj < alpha]
+            ninliers = inliers.shape[0]
+
+            # update the max values if applicable
+            if ninliers > maxinliers:
+                maxinliers = ninliers
+                bestinliers = inliers
+                # check exit condition 
+                if maxinliers > mininliers:
+                    break
+
+        print('number of inliers: ' + str(maxinliers))
+        # recompute the equation of the plane from the best inliers
+        # a, b, c, d = self.compute_plane(bestinliers)
+        return bestinliers
+
+    def compute_plane(self, points):
+        """ Compute the equation of the plane that best fits the set of points provided
+        If given 3 points, then the problem will have an exact solution. 
+        :param points: np array, Nx3 array of points (x, y, z)
+        :return normal, d: normal is (3,) np array of [a, b, c], and d is the constant
+            in the equation of the plane. """
+
+        # fit a plane to the feature point cloud for illustration
+        # see https://math.stackexchange.com/questions/99299/best-fitting-plane-given-a-set-of-points
+        centroid = points.mean(axis=0)
+        points_minus_cent = points - centroid # subtract centroid
+        u, _, _ = np.linalg.svd(points_minus_cent.T)
+        normal = u.T[2]
+
+        # normal from svd, point is centroid, get d = -(ax + by + cz)
+        d = -centroid.dot(normal)
+
+        print('The equation is {0}x + {1}y + {2}z = {3}'.format(normal[0], normal[1], normal[2], d))
+        return normal, d
 
 def triangulate(feature_data, tf, inv_K):
     """ For (u, v) image locations of a single feature for every image, as well as the corresponding
     robot poses as T matrices for every image, calculate an estimated xyz position of the feature.
 
     You're free to use whatever method you like, but we recommend a solution based on least squares, similar
-    to section 7.1 of Szeliski's book "Computer Vision: Algorithms and Applications". """
+    to section 7.1 of Szeliski's book "Computer Vision: Algorithms and Applications".
+    :param feature_data: np array (num_images, 2) - (x, y) coordinates for each feature in each frame
+    :param tf: np array (num_images, 4, 4) - homogeneous transformations for each frame
+    :param inv_K: np array (3, 3) - inverse of the camera intrinsics matrix
+    :returns pt: np array (3, ) - point in 3D space """
+    # compute the unit normals in the direction of the feature
+    homogeneous_pts = np.hstack((feature_data, np.ones((tf.shape[0], 1))))
+    rays = np.zeros((67, 3), dtype=float)
+    for i in range(tf.shape[0]):
+        # check that the points are not -1 (i.e. no feature found) first.
+        if homogeneous_pts[i, 0] != -1 and homogeneous_pts[i, 1] != -1:
+            # print(np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T))
+            rays[i, :] = np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T)
+            # normalize the rays
+            rays[i, :] /= la.norm(rays[i, :])
 
-    raise NotImplementedError('Implement triangulate!')
+    # extract all the non-zero rays
+    rays = rays[~np.all(rays == 0, axis=1)]
+    # print(rays.shape)
+    # print(rays)
+
+    # compute the sums I - vj.T*vj and (I - vj.T*vj)*cj
+    sum1 = np.zeros((3, 3), dtype=float)
+    sum2 = np.zeros((3,), dtype=float)
+    for i in range(rays.shape[0]):
+        sum1 += np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :]))
+        sum2 += np.dot(np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :])), tf[i, 0:3, 3])
+
+    point = np.dot(la.inv(sum1), sum2)
+    return point
 
 def main():
     min_feature_views = 20  # minimum number of images a feature must be seen in to be considered useful
@@ -109,23 +208,37 @@ def main():
     inv_K = np.linalg.inv(K)  # will be useful for triangulating feature locations
 
     # load in data, get consistent feature locations
-    data_folder = os.path.join(os.getcwd(),'l3_mapping_data/')
+    data_folder = os.path.join(os.getcwd(), 'l3_mapping_data/')
     f_processor = FeatureProcessor(data_folder)
-    feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
-    print(feature_locations.shape)
-    # feature rejection
-    raise NotImplementedError('(Optionally) implement feature rejection! (though we strongly recommend it)')
-    good_feature_locations = None  # delete this!
-    num_landmarks = 0  # delete this!
+    # get_matches includes lowes ratio test for extracting good matches.
+    good_feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
+    print('shape of matches: ' + str(good_feature_locations.shape))
+    num_landmarks = good_feature_locations.shape[1]
+    print('num landmarks: ' + str(num_landmarks))
+    num_frames = good_feature_locations.shape[0]
 
     pc = np.zeros((num_landmarks, 3))
 
     # create point cloud map of features
     tf = sio.loadmat("l3_mapping_data/tf.mat")['tf']
-    tf_fixed = np.linalg.inv(tf[0, :, :]).dot(tf).transpose((1, 0, 2))
+    tf_fixed = np.linalg.inv(tf[0, :, :]).dot(tf).transpose((1, 0, 2))      # (num_images, 4, 4)
+    # print(tf_fixed)
+    # print('one good landmark has the shape: ' + str(good_feature_locations[:, 0, :].shape))
+
     for i in range(num_landmarks):
-        # YOUR CODE HERE!! You need to populate good_feature_locations after you reject bad features!
-        pc[i] = triangulate(good_feature_locations[:, i, :], tf_fixed, inv_K)
+        landmark = good_feature_locations[:, i, :]
+        # check to make sure enough frames have seen this feature, w
+        if num_frames - (np.count_nonzero(landmark == -1) // 2) >= min_feature_views:
+            pc[i] = triangulate(landmark, tf_fixed, inv_K)
+
+    # extract all the non-zero point cloud points
+    # pc = pc[~np.all(pc == 0, axis=1)]
+    # num_landmarks = pc.shape[0]
+    # print(pc)
+    # print(pc.shape)
+
+    # perform RANSAC on the point cloud based on the equation of a plane
+    # pc = f_processor.ransac(pc)
 
     # ------- PLOTTING TOOLS ------------------------------------------------------------------------------
     # you don't need to modify anything below here unless you change the variable names, or want to modify
@@ -168,7 +281,7 @@ def main():
     X, Y = np.meshgrid(np.linspace(xlim[0], xlim[1], 10),
                        np.linspace(ylim[0], ylim[1], 10))
     Z = (-normal[0] * X - normal[1] * Y - d) * 1. /normal[2]
-    ax.plot_wireframe(X,Y,Z, color='k')
+    ax.plot_wireframe(X, Y, Z, color='k')
 
     # view all final good features matched on first image (to compare to point cloud)
     feat_fig = plt.figure()
