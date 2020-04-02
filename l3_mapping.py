@@ -78,12 +78,12 @@ class FeatureProcessor:
             kp, des = self.get_features(img)
             matches = self.bf.match(des, des_0)
 
-            matches = sorted(matches, key=lambda x: x.distance)
+            #matches = sorted(matches, key=lambda x: x.distance)
             avg = sum(point.distance for point in matches)/len(matches)
 
             # lowes ratio test to get the good matches
             for match in matches:  # not sure if there's a better way to filter this
-                if match.distance < 0.75*avg:
+                if match.distance < 1.2*avg:
                     train_f_num = match.trainIdx
                     query_f_num = match.queryIdx
                     # print(train_f_num, query_f_num)
@@ -174,31 +174,56 @@ def triangulate(feature_data, tf, inv_K):
     :param tf: np array (num_images, 4, 4) - homogeneous transformations for each frame
     :param inv_K: np array (3, 3) - inverse of the camera intrinsics matrix
     :returns pt: np array (3, ) - point in 3D space """
-    # compute the unit normals in the direction of the feature
-    homogeneous_pts = np.hstack((feature_data, np.ones((tf.shape[0], 1))))
-    rays = np.zeros((67, 3), dtype=float)
-    for i in range(tf.shape[0]):
-        # check that the points are not -1 (i.e. no feature found) first.
-        if homogeneous_pts[i, 0] != -1 and homogeneous_pts[i, 1] != -1:
-            # print(np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T))
-            rays[i, :] = np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T)
-            # normalize the rays
-            rays[i, :] /= la.norm(rays[i, :])
 
-    # extract all the non-zero rays
-    rays = rays[~np.all(rays == 0, axis=1)]
-    # print(rays.shape)
-    # print(rays)
-
-    # compute the sums I - vj.T*vj and (I - vj.T*vj)*cj
+    tot_features = feature_data.shape[0]   #total number of features
     sum1 = np.zeros((3, 3), dtype=float)
-    sum2 = np.zeros((3,), dtype=float)
-    for i in range(rays.shape[0]):
-        sum1 += np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :]))
-        sum2 += np.dot(np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :])), tf[i, 0:3, 3])
+    sum2 = np.zeros((3,1), dtype=float)
+
+    for j in range(0, tot_features):
+        x, y = feature_data[j][0], feature_data[j][1]
+
+        if x<0 or y<0:
+            #print("Invalid")
+            continue
+        
+        r=np.array([x, y, 1]).reshape((3,1))
+        C = tf[j, 0:3, 0:3]
+        vj = C@inv_K@r
+        vj /= np.linalg.norm(vj)
+
+        cent_j = (tf[j][:3, 3]).reshape((3,1))
+        #print(cent_j.shape)
+
+        sum1 += np.identity(3) - (vj@vj.T)
+        sum2 += (np.identity(3) - (vj@vj.T))@cent_j
+
+
+
+    # compute the unit normals in the direction of the feature
+    # homogeneous_pts = np.hstack((feature_data, np.ones((tf.shape[0], 1))))
+    # rays = np.zeros((67, 3), dtype=float)
+    # for i in range(tf.shape[0]):
+    #     # check that the points are not -1 (i.e. no feature found) first.
+    #     if homogeneous_pts[i, 0] != -1 and homogeneous_pts[i, 1] != -1:
+    #         # print(np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T))
+    #         rays[i, :] = np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T)
+    #         # normalize the rays
+    #         rays[i, :] /= la.norm(rays[i, :])
+
+    # # extract all the non-zero rays
+    # rays = rays[~np.all(rays == 0, axis=1)]
+    # # print(rays.shape)
+    # # print(rays)
+
+    # # compute the sums I - vj.T*vj and (I - vj.T*vj)*cj
+    # sum1 = np.zeros((3, 3), dtype=float)
+    # sum2 = np.zeros((3,), dtype=float)
+    # for i in range(rays.shape[0]):
+    #     sum1 += np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :]))
+    #     sum2 += np.dot(np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :])), tf[i, 0:3, 3])
 
     point = np.dot(la.inv(sum1), sum2)
-    return point
+    return point.squeeze()
 
 def main():
     min_feature_views = 20  # minimum number of images a feature must be seen in to be considered useful
@@ -210,12 +235,28 @@ def main():
     # load in data, get consistent feature locations
     data_folder = os.path.join(os.getcwd(), 'l3_mapping_data/')
     f_processor = FeatureProcessor(data_folder)
+    
     # get_matches includes lowes ratio test for extracting good matches.
-    good_feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
-    print('shape of matches: ' + str(good_feature_locations.shape))
-    num_landmarks = good_feature_locations.shape[1]
-    print('num landmarks: ' + str(num_landmarks))
-    num_frames = good_feature_locations.shape[0]
+    feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
+    # print('shape of matches: ' + str(good_feature_locations.shape))
+    num_landmarks = feature_locations.shape[1]
+    # print('num landmarks: ' + str(num_landmarks))
+    num_frames = feature_locations.shape[0]
+
+    validFeat = np.zeros(num_landmarks)
+    
+    for frame in range(0, num_frames):
+        for landmark in range(0, num_landmarks):
+            if feature_locations[frame, landmark, 0] > -1 and feature_locations[frame, landmark, 1] > -1:
+               validFeat[landmark] += 1
+    
+    #create a boolean array for ever frame that meets our min feature criteria
+    final_landmarks = validFeat > min_feature_views 
+
+    #num_landmarks = np.sum(valid_features)
+    good_feature_locations = feature_locations[:, final_landmarks, :]
+    num_landmarks = np.sum(final_landmarks)
+    print(num_landmarks)
 
     pc = np.zeros((num_landmarks, 3))
 
@@ -228,8 +269,8 @@ def main():
     for i in range(num_landmarks):
         landmark = good_feature_locations[:, i, :]
         # check to make sure enough frames have seen this feature, w
-        if num_frames - (np.count_nonzero(landmark == -1) // 2) >= min_feature_views:
-            pc[i] = triangulate(landmark, tf_fixed, inv_K)
+        #if num_frames - (np.count_nonzero(landmark == -1) // 2) >= min_feature_views:
+        pc[i] = triangulate(landmark, tf_fixed, inv_K)
 
     # extract all the non-zero point cloud points
     # pc = pc[~np.all(pc == 0, axis=1)]
