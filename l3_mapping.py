@@ -12,7 +12,6 @@ from mpl_toolkits.mplot3d import Axes3D
 import numpy.linalg as la
 from sympy import Plane, Point3D
 
-
 class FeatureProcessor:
     def __init__(self, data_folder, n_features=500, median_filt_multiplier=1.0):
         # Initiate ORB detector and the brute force matcher
@@ -105,7 +104,7 @@ class FeatureProcessor:
 
         # tunable parameters
         mininliers = .92 * num_features
-        alpha = 0.045
+        alpha = 0.042
 
         maxinliers = 0
         sympy_points = np.ndarray((num_features, 3))
@@ -135,7 +134,7 @@ class FeatureProcessor:
                 bestinliers = inliers
                 # check exit condition
                 if maxinliers > mininliers:
-                    print('required', i, 'RANSAC attempts to remove outliers.')
+                    print('required', i+1, 'RANSAC attempts to remove outliers.')
                     break
 
         print('number of inliers: ' + str(maxinliers))
