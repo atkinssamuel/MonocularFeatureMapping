@@ -5,12 +5,13 @@ import os
 import glob
 
 import numpy as np
-import cv2 
+import cv2
 import scipy.io as sio
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy.linalg as la
 from sympy import Plane, Point3D
+
 
 class FeatureProcessor:
     def __init__(self, data_folder, n_features=500, median_filt_multiplier=1.0):
@@ -78,33 +79,33 @@ class FeatureProcessor:
             kp, des = self.get_features(img)
             matches = self.bf.match(des, des_0)
 
-            matches = sorted(matches, key=lambda x: x.distance)
-            avg = sum(point.distance for point in matches)/len(matches)
+            # matches = sorted(matches, key=lambda x: x.distance)
+            avg = sum(point.distance for point in matches) / len(matches)
 
             # lowes ratio test to get the good matches
             for match in matches:  # not sure if there's a better way to filter this
-                if match.distance < 0.75*avg:
+                if match.distance < 1.2 * avg:
                     train_f_num = match.trainIdx
                     query_f_num = match.queryIdx
                     # print(train_f_num, query_f_num)
                     self.feature_match_locs[img, train_f_num, 0] = kp[query_f_num].pt[0]
-                    self.feature_match_locs[img, train_f_num, 1] = kp[query_f_num].pt[1]    
+                    self.feature_match_locs[img, train_f_num, 1] = kp[query_f_num].pt[1]
 
-        # includes the first frame feature locations
+                    # includes the first frame feature locations
         return self.feature_match_locs
 
     def ransac(self, triangulated_points):
         """ Feature rejection function
         :param triangulated_points: np array, (num_features, 3) all triangulated points
-        :return good_points: (N, 3) where N is the total number of inliers
+        :return bestinliers: (N, ), indices of the inliers, where N is the total number of inliers
         """
         # we only expect to have the 5-10% outliers, so we'll set the minimum inliers
         # to be 92% of the total number of features.
         num_features = triangulated_points.shape[0]
-        
+
         # tunable parameters
         mininliers = .92 * num_features
-        alpha = 0.005
+        alpha = 0.045
 
         maxinliers = 0
         sympy_points = np.ndarray((num_features, 3))
@@ -118,50 +119,47 @@ class FeatureProcessor:
             normal, d = self.compute_plane(triangulated_points[rand_pts, :])
 
             # make the points into a plane object
-            point = triangulated_points[rand_pts[0], :]
-            print('first point on plane: ' + str(point))
-            print('normal: ' + str(normal))
-            plane = Plane(Point3D(point[0], point[1], point[2]), normal_vector=normal)
+            plane = Plane(Point3D(triangulated_points[rand_pts[0], :]), normal_vector=normal)
 
             # compute the reprojection error for all the points
-            reproj = np.ndarray((num_features, 1))
+            reproj = np.ndarray((num_features, ))
             for j in range(num_features):
-                reproj[i] = plane.distance(Point3D(sympy_points[i, 0], sympy_points[i, 1], sympy_points[i, 2]))
-            print(reproj)
-            inliers = reproj[reproj < alpha]
-            ninliers = inliers.shape[0]
+                reproj[j] = plane.distance(Point3D(sympy_points[j, :]))
+            # print(reproj)
+            inliers = reproj < alpha
+            ninliers = np.sum(inliers)
 
             # update the max values if applicable
             if ninliers > maxinliers:
                 maxinliers = ninliers
                 bestinliers = inliers
-                # check exit condition 
+                # check exit condition
                 if maxinliers > mininliers:
+                    print('required', i, 'RANSAC attempts to remove outliers.')
                     break
 
         print('number of inliers: ' + str(maxinliers))
-        # recompute the equation of the plane from the best inliers
-        # a, b, c, d = self.compute_plane(bestinliers)
+
+        # returns the inlier indices, not the actual values
         return bestinliers
 
     def compute_plane(self, points):
         """ Compute the equation of the plane that best fits the set of points provided
-        If given 3 points, then the problem will have an exact solution. 
+        If given 3 points, then the problem will have an exact solution.
         :param points: np array, Nx3 array of points (x, y, z)
         :return normal, d: normal is (3,) np array of [a, b, c], and d is the constant
             in the equation of the plane. """
-
         # fit a plane to the feature point cloud for illustration
         # see https://math.stackexchange.com/questions/99299/best-fitting-plane-given-a-set-of-points
         centroid = points.mean(axis=0)
-        points_minus_cent = points - centroid # subtract centroid
+        points_minus_cent = points - centroid  # subtract centroid
         u, _, _ = np.linalg.svd(points_minus_cent.T)
         normal = u.T[2]
 
         # normal from svd, point is centroid, get d = -(ax + by + cz)
         d = -centroid.dot(normal)
 
-        print('The equation is {0}x + {1}y + {2}z = {3}'.format(normal[0], normal[1], normal[2], d))
+        # print('The equation is {0}x + {1}y + {2}z = {3}'.format(normal[0], normal[1], normal[2], d))
         return normal, d
 
 def triangulate(feature_data, tf, inv_K):
@@ -174,31 +172,32 @@ def triangulate(feature_data, tf, inv_K):
     :param tf: np array (num_images, 4, 4) - homogeneous transformations for each frame
     :param inv_K: np array (3, 3) - inverse of the camera intrinsics matrix
     :returns pt: np array (3, ) - point in 3D space """
-    # compute the unit normals in the direction of the feature
-    homogeneous_pts = np.hstack((feature_data, np.ones((tf.shape[0], 1))))
-    rays = np.zeros((67, 3), dtype=float)
-    for i in range(tf.shape[0]):
-        # check that the points are not -1 (i.e. no feature found) first.
-        if homogeneous_pts[i, 0] != -1 and homogeneous_pts[i, 1] != -1:
-            # print(np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T))
-            rays[i, :] = np.dot(tf[i, 0:3, 0:3], np.dot(inv_K, homogeneous_pts[i, :]).T)
-            # normalize the rays
-            rays[i, :] /= la.norm(rays[i, :])
 
-    # extract all the non-zero rays
-    rays = rays[~np.all(rays == 0, axis=1)]
-    # print(rays.shape)
-    # print(rays)
-
-    # compute the sums I - vj.T*vj and (I - vj.T*vj)*cj
+    tot_features = feature_data.shape[0]  # total number of features
     sum1 = np.zeros((3, 3), dtype=float)
-    sum2 = np.zeros((3,), dtype=float)
-    for i in range(rays.shape[0]):
-        sum1 += np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :]))
-        sum2 += np.dot(np.subtract(tf[i, 0:3, 0:3], np.dot(rays[i, :].T, rays[i, :])), tf[i, 0:3, 3])
+    sum2 = np.zeros((3, 1), dtype=float)
+
+    for j in range(0, tot_features):
+        x, y = feature_data[j][0], feature_data[j][1]
+
+        if x < 0 or y < 0:
+            # print("Invalid")
+            continue
+
+        r = np.array([x, y, 1]).reshape((3, 1))
+        C = tf[j, 0:3, 0:3]
+        vj = C @ inv_K @ r
+        vj /= np.linalg.norm(vj)
+
+        cent_j = (tf[j][:3, 3]).reshape((3, 1))
+        # print(cent_j.shape)
+
+        sum1 += np.identity(3) - (vj @ vj.T)
+        sum2 += (np.identity(3) - (vj @ vj.T)) @ cent_j
 
     point = np.dot(la.inv(sum1), sum2)
-    return point
+    return point.squeeze()
+
 
 def main():
     min_feature_views = 20  # minimum number of images a feature must be seen in to be considered useful
@@ -210,35 +209,47 @@ def main():
     # load in data, get consistent feature locations
     data_folder = os.path.join(os.getcwd(), 'l3_mapping_data/')
     f_processor = FeatureProcessor(data_folder)
+
     # get_matches includes lowes ratio test for extracting good matches.
-    good_feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
-    print('shape of matches: ' + str(good_feature_locations.shape))
-    num_landmarks = good_feature_locations.shape[1]
-    print('num landmarks: ' + str(num_landmarks))
-    num_frames = good_feature_locations.shape[0]
+    feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
+    # print('shape of matches: ' + str(good_feature_locations.shape))
+    num_landmarks = feature_locations.shape[1]
+    # print('num landmarks: ' + str(num_landmarks))
+    num_frames = feature_locations.shape[0]
+
+    validFeat = np.zeros(num_landmarks)
+
+    for frame in range(0, num_frames):
+        for landmark in range(0, num_landmarks):
+            if feature_locations[frame, landmark, 0] > -1 and feature_locations[frame, landmark, 1] > -1:
+                validFeat[landmark] += 1
+
+    # create a boolean array for ever frame that meets our min feature criteria
+    final_landmarks = validFeat > min_feature_views
+
+    # num_landmarks = np.sum(valid_features)
+    good_feature_locations = feature_locations[:, final_landmarks, :]
+    num_landmarks = np.sum(final_landmarks)
+    print('landmarks after filtering features: ', num_landmarks)
 
     pc = np.zeros((num_landmarks, 3))
 
     # create point cloud map of features
     tf = sio.loadmat("l3_mapping_data/tf.mat")['tf']
-    tf_fixed = np.linalg.inv(tf[0, :, :]).dot(tf).transpose((1, 0, 2))      # (num_images, 4, 4)
+    tf_fixed = np.linalg.inv(tf[0, :, :]).dot(tf).transpose((1, 0, 2))  # (num_images, 4, 4)
     # print(tf_fixed)
     # print('one good landmark has the shape: ' + str(good_feature_locations[:, 0, :].shape))
 
     for i in range(num_landmarks):
-        landmark = good_feature_locations[:, i, :]
-        # check to make sure enough frames have seen this feature, w
-        if num_frames - (np.count_nonzero(landmark == -1) // 2) >= min_feature_views:
-            pc[i] = triangulate(landmark, tf_fixed, inv_K)
-
-    # extract all the non-zero point cloud points
-    # pc = pc[~np.all(pc == 0, axis=1)]
-    # num_landmarks = pc.shape[0]
-    # print(pc)
-    # print(pc.shape)
+        pc[i] = triangulate(good_feature_locations[:, i, :], tf_fixed, inv_K)
 
     # perform RANSAC on the point cloud based on the equation of a plane
-    # pc = f_processor.ransac(pc)
+    ransac_ind = f_processor.ransac(pc)
+    # update good_feature_locations from the points that were returned after ransac
+    pc = pc[ransac_ind, :]
+    good_feature_locations = good_feature_locations[:, ransac_ind, :]
+    num_landmarks = pc.shape[0]
+    print('landmarks after RANSAC: ', num_landmarks)
 
     # ------- PLOTTING TOOLS ------------------------------------------------------------------------------
     # you don't need to modify anything below here unless you change the variable names, or want to modify
@@ -268,7 +279,7 @@ def main():
     # fit a plane to the feature point cloud for illustration
     # see https://math.stackexchange.com/questions/99299/best-fitting-plane-given-a-set-of-points
     centroid = pc.mean(axis=0)
-    pc_minus_cent = pc - centroid # subtract centroid
+    pc_minus_cent = pc - centroid  # subtract centroid
     u, s, vh = np.linalg.svd(pc_minus_cent.T)
     normal = u.T[2]
 
@@ -280,7 +291,7 @@ def main():
     ylim = ax.get_ylim()
     X, Y = np.meshgrid(np.linspace(xlim[0], xlim[1], 10),
                        np.linspace(ylim[0], ylim[1], 10))
-    Z = (-normal[0] * X - normal[1] * Y - d) * 1. /normal[2]
+    Z = (-normal[0] * X - normal[1] * Y - d) * 1. / normal[2]
     ax.plot_wireframe(X, Y, Z, color='k')
 
     # view all final good features matched on first image (to compare to point cloud)
