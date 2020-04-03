@@ -209,7 +209,6 @@ def main():
     # load in data, get consistent feature locations
     data_folder = os.path.join(os.getcwd(), 'l3_mapping_data/')
     f_processor = FeatureProcessor(data_folder)
-
     # get_matches includes lowes ratio test for extracting good matches.
     feature_locations = f_processor.get_matches()  # output shape should be (num_images, num_features, 2)
     # print('shape of matches: ' + str(good_feature_locations.shape))
